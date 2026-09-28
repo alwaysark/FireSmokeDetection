@@ -25,14 +25,8 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="app.py" />
-    <Compile Include="uicontroller\DengLu_controller.py" />
-    <Compile Include="uicontroller\home_controller.py" />
     <Compile Include="uicontroller\Main_Window.py" />
-    <Compile Include="uicontroller\page_dispathcer.py" />
-    <Compile Include="uicontroller\ZhuCe_controller.py" />
-    <Compile Include="UI\DengLu.py" />
     <Compile Include="UI\FireSmokeDetection.py" />
-    <Compile Include="UI\ZhuCe.py" />
     <Compile Include="utils\detect.py" />
     <Compile Include="utils\general.py" />
     <Compile Include="utils\utils.py" />

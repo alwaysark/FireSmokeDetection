@@ -90,7 +90,7 @@ class DetectThread(QtCore.QThread):
                     if self.print_result:  # 如果打印结果标志为True
                         print(res)  # 打印结果
                     # if self.print_bofang:  # 播放警报
-                    if str(res).__contains__("fire"):
+                    if 'fire' in res:
                         i = i + 1
                         if i == 20:
                             playAudio()
