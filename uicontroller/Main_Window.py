@@ -147,12 +147,12 @@ class MainWindow(QtWidgets.QMainWindow, FireSmokeDetection.Ui_MainWindow):
 
         # init params
         # 初始化参数
-        self.self_script_path = ''
-        self.save_video = False
-        self.source = ''
-        self.flip_type = (None, 1, 0, -1)
+        self.save_video = False             # 正在录制标志位
+        self.source = ''                    # 当前输入源：'0'（摄像头）、文件路径、'screen'（屏幕捕获）
+        self.flip_type = (None, 1, 0, -1)   # 翻转下拉框的“索引→参数”映射元组：None不翻转、1水平、0垂直、-1双向
+        # 旋转下拉框的“索引→参数”映射元组
         self.rotate_type = (None, cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE, cv2.ROTATE_180)
-        self.video_writer: cv2.VideoWriter
+        self.video_writer: cv2.VideoWriter      #类型注解，没有创建对象。告诉IDE这个成员将来会是 VideoWriter 类型，为的是以后写代码ide会自动补全
         self.box_color = (255, 0, 0)
         self.font = QtGui.QFont("Arial", 9)  # 默认字体设置为Arial，大小9
 
@@ -170,7 +170,8 @@ class MainWindow(QtWidgets.QMainWindow, FireSmokeDetection.Ui_MainWindow):
         self.loadConfig()
 
 
-    def UI(self):  # 槽函数`UI`方法定义了各种用户界面元素的行为。例如，当点击某个按钮时，会调用一个特定的函数。这些函数可以改变输出路径，
+# ==================== 绑定信号和槽（全部 connect 都在这里） ====================
+    def UI(self):
         # 选择媒体文件，开始和停止检测，保存日志，保存截图，保存视频，更改类别，显示类别个数，打开保存目录，导入自定义脚本，更改输入配置，
         # 更改锚框颜色，锁定切换，清空控制台，重置输入源等。
         self.BaoCunLuJing.clicked.connect(self.changeOutputPath)  # 选择保存位置
@@ -202,7 +203,311 @@ class MainWindow(QtWidgets.QMainWindow, FireSmokeDetection.Ui_MainWindow):
         self.ChongZhi.clicked.connect(self.resetSource)  # 重置输入源
 
 
-    def loadConfig(self):  # 加载配置,从配置文件`config.cfg`中加载配置。
+# ==================== 槽函数（按 UI() 中的绑定顺序排列） ====================
+    # ↑ UI(): self.BaoCunLuJing.clicked —— 选择保存位置
+    def changeOutputPath(self):  # 选择保存位置
+        # 它会打开一个目录对话框让用户选择保存位置。然后，它会设置文本输入框的文本为保存位置的路径。
+        file_path = QFileDialog.getExistingDirectory(self, "选择保存位置", self.BaoCun.text())
+        if file_path:
+            self.BaoCun.setText(file_path)
+
+    # ↑ UI(): self.WenJianLuJing.clicked —— 选择媒体文件
+    def changeMediaFile(self, path=None):  # 选择媒体文件
+        # 如果没有提供路径，它会打开一个文件对话框让用户选择媒体文件。然后，它会设置输入源为媒体文件的路径。
+        if path is None:
+            path, _ = QFileDialog.getOpenFileName(self, "选择文件",
+                                                  os.path.abspath(self.WenJian.text()),
+                                                  '*.asf *.avi *.gif *.m4v *.mkv *.mov *.mp4 *.mpeg *.mpg *.ts *.wmv '
+                                                  '*.bmp *.dng *.jpeg *.jpg *.mpo *.png *.tif *.tiff *.webp *.pfm')
+        if path:
+            self.setSource(path)
+
+    # ↑ UI(): self.QuanZhongLuJing.clicked —— 选择模型
+    def changeModelFile(self, path=None):  # 选择权重文件
+        # 如果没有提供路径，它会打开一个文件对话框让用户选择模型文件。
+        if path is None:
+            path, _ = QFileDialog.getOpenFileName(self, "选择模型",
+                                                  os.path.abspath(self.QuanZhong.text()),
+                                                  '*.onnx')
+        # 然后，它会设置文本输入框的文本为模型文件的路径。
+        if path:
+            self.QuanZhong.setText(path)
+        # 最后，它会查找与模型文件同名的类别文件，如果存在，它会调用changeClassFile函数更改类别文件。
+        class_txt_path = os.path.join(os.path.dirname(os.path.dirname(path)),
+                                      ''.join(os.path.basename(path).split('.')[:-1]) + '.txt')
+        if os.path.exists(class_txt_path):
+            self.changeClassFile(path=class_txt_path)
+
+    # ↑ UI(): self.KaiShi.clicked —— 开始检测
+    def start(self):  # 启动检测线程
+        # 如果检测线程已经在运行，它会打印一条消息并返回。如果模型文件或视频文件不存在，它会在日志中显示一条错误消息并返回。
+        if self.dt.is_detecting:
+            print('already running')
+            return
+        if not os.path.exists(self.QuanZhong.text()):
+            self.displayLog(f'"{self.QuanZhong.text()}" 模型文件不存在', color='red')
+            return
+        if self.ShuRuFangShi.currentIndex() == 1 and not os.path.exists(self.WenJian.text()):  # 视频
+            self.displayLog(f'"{self.WenJian.text()}" not exist', color='red')
+            return
+        if 'dataset' not in self.dt.__dict__.keys() and not self.setSource(self.source):
+            return
+        # 然后，它会初始化一个YOLOv5模型，并设置模型的配置，包括输入宽度、输入高度、置信度阈值、IOU阈值、是否绘制框、线宽、
+        # 类名、框颜色、文本颜色和是否返回位置等。然后，它会初始化模型，并开始检测。最后，它会在状态栏上显示一条消息。
+        self.dt.model = detect.YOLOv5()
+        self.dt.model.initConfig(input_width=640,
+                                 input_height=640,
+                                 conf_thres=self.ZhiXinDu.value(),
+                                 iou_thres=self.IOU.value(),
+                                 draw_box=self.MaoKuang.isChecked(),
+                                 thickness=2,
+                                 class_names=self.LeiBie.text().split(','),
+                                 box_color=self.box_color,
+                                 txt_color=tuple(255 - x for x in self.box_color),
+                                 with_pos=self.DaYinZuoBiao.isChecked(),
+                                 )
+
+        self.dt.model.initModel(self.QuanZhong.text(), t='onnxruntime')  # cv2.dnn or onnxruntime
+
+        self.dt.startDetect()
+        self.saveToFile(self.LuZhiShiPin)
+        print('start detect')
+        #self.statusBar().showMessage('start detect...', 5000)
+
+    # ↑ UI(): self.TingZhi.clicked；__init__: dt.finished —— 双源槽
+    def stop(self):  # 停止检测
+        # 它首先停止任何正在进行的录制。
+        self.stopRecord()
+        # 如果检测线程正在运行，它会停止检测，并在状态栏上显示一条消息。
+        if self.dt.is_detecting:
+            self.dt.stopDetect()
+            #self.statusBar().showMessage('stop detect', 5000)
+            print('stop detect')
+            return
+        # 如果检测线程正在运行但没有进行检测，它会停止线程并等待线程结束。
+        if self.dt.is_running:
+            self.dt.stopThread()
+            self.dt.wait()
+
+    # ↑ UI(): self.ShuRuFangShi.currentIndexChanged —— 输入方式切换
+    def indexChanged(self, index):  # 切换输入方式
+        # indexChanged函数用于切换输入方式。它首先阻止dt对象发出任何信号，然后停止并等待当前的检测线程。
+        # 然后，根据下拉列表的当前索引来设置输入源。输入源可以是摄像头、文件、全屏。最后，它允许dt对象再次发出信号。
+        self.dt.blockSignals(True)
+        self.dt.stopThread()
+        self.dt.wait()
+        if index == 0:  # webcam 0
+            self.setSource('0')
+        elif index == 1 and os.path.exists(self.WenJian.text()):  # file
+            self.setSource(self.WenJian.text())
+        elif index == 2:  # full screen 0
+            self.setSource('screen')
+        self.dt.blockSignals(False)
+
+    # ↑ UI(): self.BaoCunRiZhi/BaoCunJieTu/LuZhiShiPin.clicked —— 一槽三源，参数区分按钮
+    def saveToFile(self, index):  # 保存截图、视频、日志
+        # 具体的保存内容取决于传入的index参数。如果index等于self.BaoCunJieTu，则保存截图；
+        # 如果index等于self.BaoCunRiZhi，则保存日志；如果index等于self.LuZhiShiPin，
+        # 则根据self.LuZhiShiPin.isChecked()的值来决定是否开始或停止录屏。
+        os.makedirs(self.BaoCun.text(), exist_ok=True) # 创建一个目录，该目录的路径是self.BaoCun.text()返回的字符串
+        head = datetime.now().strftime('%m-%d %H-%M-%S') # 获取当前的日期和时间，并将其格式化为字符串
+        # 保存截图
+        if index == self.BaoCunJieTu: # 如果self.BaoCunJieTu是True
+            path = os.path.join(self.BaoCun.text(), f'ScreenShot_{head}.png')  # 创建一个路径，该路径指向一个.png文件
+            if self.TuXiangShuChu.pixmap() is None:
+                return
+            self.TuXiangShuChu.pixmap().toImage().save(path) # 否则，将self.TuXiangShuChu.pixmap()转换为图像，并将其保存到path指向的文件中
+            print(f'ScreenShot has been saved to <a href="file:///{path}">{path}</a>') # 打印一条消息，告诉用户截图已经被保存
+        # 保存日志
+        elif index == self.BaoCunRiZhi:
+            path = os.path.join(self.BaoCun.text(), f'log_{head}.log')
+            with open(path, 'w') as f:
+                f.write(self.LiuCheng.toPlainText())
+                print(f'Log has been saved to <a href="file:///{path}">{path}</a>')
+        # 保存录屏视频
+        elif index == self.LuZhiShiPin and self.LuZhiShiPin.isChecked() and self.dt.is_detecting:
+            if self.dt.dataset.is_image:
+                return
+            self.save_video_path = os.path.join(self.BaoCun.text(), f'video_{head}.mp4')
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # 创建一个视频编解码器
+            fps = self.LuZhiZhenLv.value() # 获取录制视频的帧率
+            width, height = self.dt.dataset.w, self.dt.dataset.h  # 获取录制视频的宽度和高度
+            self.video_writer = cv2.VideoWriter(self.save_video_path, fourcc, fps, (width, height))  # 写入视频
+            self.save_video = True
+            print(f'begin recording...') # 打印一条消息，告诉用户开始录制视频
+        elif index == self.LuZhiShiPin and not self.LuZhiShiPin.isChecked():
+            self.stopRecord()
+
+    # ↑ UI(): self.XuanZeLeiBie.clicked —— 选择类别
+    def changeClassFile(self, path=None):  # 选择类别文件
+        # 如果没有提供路径，它会打开一个文件对话框让用户选择类别文件。然后，它会设置文本编辑器的文本为类别文件的内容。
+        if path is None:
+            path, _ = QFileDialog.getOpenFileName(self, "选择文件",
+                                                  os.path.abspath(self.class_file),
+                                                  '*.txt')
+        if path:
+            self.class_file = path
+            with open(self.class_file, 'r') as f:
+                self.LeiBie.setText(f.read().replace('，', ',').replace('|', ',').replace('\n', ','))
+
+    # ↑ UI(): self.LeiBie.textChanged —— 显示类别个数
+    def displayClassNum(self):  # 显示类别数量
+        # 它首先从文本编辑器中获取类别列表，然后创建一个集合以去除重复的类别，并且去除空字符串。最后，它将类别数量显示在标签上。
+        #class_set = set(self.LeiBie.toPlainText().split(","))
+        class_set = set(self.LeiBie.text().split(","))
+        class_set.discard('')
+        self.label_32.setText(f'类别({len(class_set)}):')
+
+    # ↑ UI(): self.XianShiZhenShu.stateChanged —— 帧数显示开关
+    def displayFps(self):  # 显示FPS。将检测对象的display_fps属性设置为复选框的选中状态。
+        self.dt.display_fps = self.XianShiZhenShu.isChecked()
+
+    # ↑ UI(): self.DaYinJieGuo.clicked —— 打印检测结果开关
+    def printResult(self):  # 打印检测结果,用于设置是否打印检测结果。
+        self.dt.print_result = self.DaYinJieGuo.isChecked()
+
+    # ↑ UI(): self.BoFangJingBao.clicked —— 警报开关
+    def printBoFang(self):  # 播放警报。
+        setIsFlasg()
+
+    # ↑ UI(): self.DaYinZuoBiao/MaoKuang.clicked、ZhiXinDu/IOU.valueChanged、旋转/翻转.currentIndexChanged —— 一槽六源，参数热更新
+    def changeInputConfig(self):  # 更改输入配置
+        # 如果检测模型不为空，它会更改模型的置信度阈值、IOU阈值、是否显示锚框和是否返回坐标。
+        # 如果数据集存在，它还会更改数据集的翻转和旋转类型。
+        if self.dt.model is not None:
+            self.dt.model.conf_threshold = self.ZhiXinDu.value()  # 更改置信度
+            self.dt.model.iou_threshold = self.IOU.value()  # 更改IOU
+            self.dt.model.draw_box = self.MaoKuang.isChecked()  # 是否显示锚框
+            self.dt.model.with_pos = self.DaYinZuoBiao.isChecked()  # 是否返回坐标
+        if 'dataset' in self.dt.__dict__.keys() and self.dt.dataset is not None:
+            self.dt.dataset.flip = self.flip_type[self.FanZhuanTuXiang.currentIndex()]
+            self.dt.dataset.rotate = self.rotate_type[self.XuanZhuanTuXiang.currentIndex()]
+
+    # ↑ UI(): self.MaoKuangYanSe.clicked —— 更改锚框颜色
+    def changeBoxColor(self, color: tuple = None):  # 更改锚框颜色
+        # 如果没有提供颜色，它会打开一个颜色对话框让用户选择颜色。选择的颜色将被应用到锚框和文本颜色。
+        if not color:
+            old_color = self.dt.model.box_color if self.dt.model else self.box_color
+            new_color = QtWidgets.QColorDialog.getColor(QtGui.QColor(*old_color))
+            if not new_color.isValid():
+                return
+            color = new_color.getRgb()[0:3]
+        self.MaoKuangYanSe.setStyleSheet(f"color:rgb{color}")
+        self.box_color = color
+        if self.dt.model is None:
+            return
+        self.dt.model.box_color = self.box_color
+        self.dt.model.txt_color = tuple(255 - x for x in self.box_color)
+
+    # ↑ UI(): self.TiaoJieZiTi.clicked —— 更改字体
+    def changeFont(self):
+        new_font, ok = QtWidgets.QFontDialog.getFont(self.font, self, options=QtWidgets.QFontDialog.DontUseNativeDialog)
+        if ok:
+            self.font = new_font
+            self.setFont(new_font)
+            self.updateFontForChildren(new_font)  # 更新所有子控件的字体
+            self.saveConfig()  # 保存配置
+
+    # ↑ UI(): self.SuoDing.clicked —— 控制台锁定底部
+    def lockBottom(self):  # 锁定底部切换
+        # 它将滚动条的值设置为最大值（如果按钮被按下）或最大值减一（如果按钮没有被按下）。
+        scrollbar = self.LiuCheng.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum() if self.SuoDing.isChecked() else scrollbar.maximum() - 1)
+
+    # ↑ UI(): self.ChongZhi.clicked —— 重置输入源
+    def resetSource(self):  # 重置输入源
+        # 如果当前正在进行检测，它将直接返回。否则，它会根据下拉列表的当前索引更改输入源。
+        # 这个函数可能用于在不同的输入源之间切换，例如从一个视频文件切换到另一个视频文件，
+        # 或者从视频文件切换到摄像头输入。这个函数的具体行为取决于indexChanged函数的实现。
+        # 这个函数会在用户想要更改输入源时被调用。
+        if self.dt.is_detecting:
+            return
+        self.indexChanged(self.ShuRuFangShi.currentIndex())
+
+
+# ==================== 槽函数（系统/跨线程信号目标，不在 UI() 中绑定） ====================
+    # __init__: self.dt.img_sig（检测线程 → 主线程，AutoConnection 自动排队）
+    def displayImg(self, img: numpy.ndarray):  # 显示图片到标签上。
+        # 如果正在保存视频，它会将图像写入视频写入器。然后，它将图像数据设置为脚本API的图像数据。
+        # 然后，它创建一个QImage对象，将图像的宽度和高度缩放到标签的宽度和高度之间的较小值，然后将缩放后的图像设置为标签的像素图。
+        if self.save_video:
+            self.video_writer.write(cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+        # self.script_api.img_data = img
+        img = QtGui.QImage(img.data, img.shape[1], img.shape[0], img.shape[1] * 3, QtGui.QImage.Format_RGB888)
+        p = min(self.TuXiangShuChu.width() / img.width(), self.TuXiangShuChu.height() / img.height())
+        pix = QtGui.QPixmap(img).scaled(int(img.width() * p), int(img.height() * p))
+        self.TuXiangShuChu.setPixmap(pix)
+
+    # app.py: StdOut.signalForText（print 劫持 → 控制台）
+    def displayLog(self, text: str, color='black', plain_text=False):  # 输出控制台信息到LiuCheng
+        # 首先创建一个带有当前时间的头部字符串。
+        head_ = f"{datetime.now().strftime('%H:%M:%S.%f')} >> "
+        # 然后，根据文本是否以’<'开始或是否为纯文本，它以不同的方式添加文本到文本浏览器。
+        if text.startswith(('<',)) or plain_text:
+            self.LiuCheng.setTextColor(QtGui.QColor('black'))
+            self.LiuCheng.append(head_)
+            self.LiuCheng.setTextColor(QtGui.QColor(color))
+            self.LiuCheng.insertPlainText(text)
+        else:
+            text = f"{head_}<font color='{color}'>{text}"
+            self.LiuCheng.append(text)
+        # 自动切换锁定状态，根据滚动条的值是否大于或等于其最大值来设置复选按钮的选中状态，并根据复选按钮的选中状态来设置滚动条的值。
+        scrollbar = self.LiuCheng.verticalScrollBar()
+        self.SuoDing.setChecked(scrollbar.value() >= scrollbar.maximum())
+        if self.SuoDing.isChecked():
+            scrollbar.setValue(scrollbar.maximum())
+
+
+# ==================== 内部辅助（不连任何信号） ====================
+    def setSource(self, source, **kwargs) -> bool:  # 设置输入源。
+        self.source = str(source) # 它首先将输入源转换为字符串
+        # 然后尝试创建一个新的DataLoader实例，该实例使用输入源、帧跳过数、旋转类型作为参数。
+        try:
+            self.dt.dataset = detect.DataLoader(self.source,
+                                                # frame_skip=self.ShuaXinLv.value(),
+                                                flip=self.flip_type[self.FanZhuanTuXiang.currentIndex()],
+                                                rotate=self.rotate_type[self.XuanZhuanTuXiang.currentIndex()],
+                                                **kwargs)
+        # 如果在创建DataLoader实例时发生异常，它会在标签上显示错误信息，并在日志中以红色显示错误信息，然后返回False。
+        except Exception as e:
+            self.TuXiangShuChu.setText(str(e))
+            self.displayLog(str(e), color='red')
+            return False
+        # 否则，它会停止任何正在进行的录制，阻止下拉列表发出信号，然后根据输入源的类型设置下拉列表的当前索引。
+        # 最后，它允许下拉列表再次发出信号，如果数据集是摄像头或屏幕，它会启动检测线程。
+        self.stopRecord()
+        self.ShuRuFangShi.blockSignals(True)
+        index = (self.source == '0',
+                 self.dt.dataset.is_image or self.dt.dataset.is_video,
+                 # self.dt.dataset.is_url,
+                 self.source.lower() == 'screen',
+                 True).index(True)
+        self.ShuRuFangShi.setCurrentIndex(index)
+        self.ShuRuFangShi.blockSignals(False)
+        # 如果数据集是图像或视频，它会设置文本输入框的文本为输入源，然后从输入源读取一帧图像，可能会翻转和旋转图像，然后显示图像。
+        if self.dt.dataset.is_wabcam or self.dt.dataset.is_screen:
+            self.dt.startThread()
+        elif self.dt.dataset.is_image or self.dt.dataset.is_video:
+            self.WenJian.setText(self.source)
+            vc = cv2.VideoCapture(self.source)
+            img = vc.read()[1]
+            if self.FanZhuanTuXiang.currentIndex() != 0:
+                img = cv2.flip(img, self.flip_type[self.FanZhuanTuXiang.currentIndex()])
+            if self.XuanZhuanTuXiang.currentIndex() != 0:
+                img = cv2.rotate(img, self.rotate_type[self.XuanZhuanTuXiang.currentIndex()])
+            self.displayImg(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+            vc.release()
+        # 最后，它返回一个布尔值，表示dt对象是否有一个dataset属性。
+        return 'dataset' in self.dt.__dict__.keys()
+
+    def stopRecord(self):  # 停止录制，如果当前没有录制视频，它将直接返回。否则，它会停止录制并释放视频写入器。
+        if not self.save_video:
+            return
+        self.save_video = False
+        self.video_writer.release()
+        print(f'Video has been saved to <a href="file:///{self.save_video_path}">{self.save_video_path}</a>')
+
+    def loadConfig(self):  # 从配置文件`config.cfg`中加载配置。
         # 这些配置包括帧跳过数、翻转类型、旋转类型、输入源、模型路径、类别路径、是否显示帧数、置信度阈值、
         # IOU阈值、是否显示框、框颜色、是否打印结果、是否返回位置、是否记录视频、记录帧数、输出路径、脚本路径、脚本状态和检测状态等。
         # 这些配置被用来初始化各种参数和设置。
@@ -257,294 +562,13 @@ class MainWindow(QtWidgets.QMainWindow, FireSmokeDetection.Ui_MainWindow):
             cfg.set('root', 'record_video', self.LuZhiShiPin.isChecked())
             cfg.set('root', 'record_fps', self.LuZhiZhenLv.value())
             cfg.set('root', 'out_path', self.BaoCun.text())
-            cfg.set('root', 'script_path', self.self_script_path)
-
-    def changeInputConfig(self):  # 更改输入配置
-        # 如果检测模型不为空，它会更改模型的置信度阈值、IOU阈值、是否显示锚框和是否返回坐标。
-        # 如果数据集存在，它还会更改数据集的翻转和旋转类型。
-        if self.dt.model is not None:
-            self.dt.model.conf_threshold = self.ZhiXinDu.value()  # 更改置信度
-            self.dt.model.iou_threshold = self.IOU.value()  # 更改IOU
-            self.dt.model.draw_box = self.MaoKuang.isChecked()  # 是否显示锚框
-            self.dt.model.with_pos = self.DaYinZuoBiao.isChecked()  # 是否返回坐标
-        if 'dataset' in self.dt.__dict__.keys() and self.dt.dataset is not None:
-            self.dt.dataset.flip = self.flip_type[self.FanZhuanTuXiang.currentIndex()]
-            self.dt.dataset.rotate = self.rotate_type[self.XuanZhuanTuXiang.currentIndex()]
-
-    def changeBoxColor(self, color: tuple = None):  # 更改锚框颜色
-        # 如果没有提供颜色，它会打开一个颜色对话框让用户选择颜色。选择的颜色将被应用到锚框和文本颜色。
-        if not color:
-            old_color = self.dt.model.box_color if self.dt.model else self.box_color
-            new_color = QtWidgets.QColorDialog.getColor(QtGui.QColor(*old_color))
-            if not new_color.isValid():
-                return
-            color = new_color.getRgb()[0:3]
-        self.MaoKuangYanSe.setStyleSheet(f"color:rgb{color}")
-        self.box_color = color
-        if self.dt.model is None:
-            return
-        self.dt.model.box_color = self.box_color
-        self.dt.model.txt_color = tuple(255 - x for x in self.box_color)
-
-    def changeFont(self):
-        new_font, ok = QtWidgets.QFontDialog.getFont(self.font, self, options=QtWidgets.QFontDialog.DontUseNativeDialog)
-        if ok:
-            self.font = new_font
-            self.setFont(new_font)
-            self.updateFontForChildren(new_font)  # 更新所有子控件的字体
-            self.saveConfig()  # 保存配置
 
     def updateFontForChildren(self, font):
         for widget in self.findChildren(QtWidgets.QWidget):
             widget.setFont(font)
-    def printResult(self):  # 打印检测结果,用于设置是否打印检测结果。
-        self.dt.print_result = self.DaYinJieGuo.isChecked()
 
-    def printBoFang(self):  # 播放警报。
-        setIsFlasg()
-    def saveToFile(self, index):  # 保存截图、视频、日志
-        # 具体的保存内容取决于传入的index参数。如果index等于self.BaoCunJieTu，则保存截图；
-        # 如果index等于self.BaoCunRiZhi，则保存日志；如果index等于self.LuZhiShiPin，
-        # 则根据self.LuZhiShiPin.isChecked()的值来决定是否开始或停止录屏。
-        os.makedirs(self.BaoCun.text(), exist_ok=True) # 创建一个目录，该目录的路径是self.BaoCun.text()返回的字符串
-        head = datetime.now().strftime('%m-%d %H-%M-%S') # 获取当前的日期和时间，并将其格式化为字符串
-        # 保存截图
-        if index == self.BaoCunJieTu: # 如果self.BaoCunJieTu是True
-            path = os.path.join(self.BaoCun.text(), f'ScreenShot_{head}.png')  # 创建一个路径，该路径指向一个.png文件
-            if self.TuXiangShuChu.pixmap() is None:
-                return
-            self.TuXiangShuChu.pixmap().toImage().save(path) # 否则，将self.TuXiangShuChu.pixmap()转换为图像，并将其保存到path指向的文件中
-            print(f'ScreenShot has been saved to <a href="file:///{path}">{path}</a>') # 打印一条消息，告诉用户截图已经被保存
-        # 保存日志
-        elif index == self.BaoCunRiZhi:
-            path = os.path.join(self.BaoCun.text(), f'log_{head}.log')
-            with open(path, 'w') as f:
-                f.write(self.LiuCheng.toPlainText())
-                print(f'Log has been saved to <a href="file:///{path}">{path}</a>')
-        # 保存录屏视频
-        elif index == self.LuZhiShiPin and self.LuZhiShiPin.isChecked() and self.dt.is_detecting:
-            if self.dt.dataset.is_image:
-                return
-            self.save_video_path = os.path.join(self.BaoCun.text(), f'video_{head}.mp4')
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # 创建一个视频编解码器
-            fps = self.LuZhiZhenLv.value() # 获取录制视频的帧率
-            width, height = self.dt.dataset.w, self.dt.dataset.h  # 获取录制视频的宽度和高度
-            self.video_writer = cv2.VideoWriter(self.save_video_path, fourcc, fps, (width, height))  # 写入视频
-            self.save_video = True
-            print(f'begin recording...') # 打印一条消息，告诉用户开始录制视频
-        elif index == self.LuZhiShiPin and not self.LuZhiShiPin.isChecked():
-            self.stopRecord()
 
-    def stopRecord(self):  # 停止录制，如果当前没有录制视频，它将直接返回。否则，它会停止录制并释放视频写入器。
-        if not self.save_video:
-            return
-        self.save_video = False
-        self.video_writer.release()
-        print(f'Video has been saved to <a href="file:///{self.save_video_path}">{self.save_video_path}</a>')
-
-    def resetSource(self):  # 重置输入源
-        # 如果当前正在进行检测，它将直接返回。否则，它会根据下拉列表的当前索引更改输入源。
-        # 这个函数可能用于在不同的输入源之间切换，例如从一个视频文件切换到另一个视频文件，
-        # 或者从视频文件切换到摄像头输入。这个函数的具体行为取决于indexChanged函数的实现。
-        # 这个函数会在用户想要更改输入源时被调用。
-        if self.dt.is_detecting:
-            return
-        self.indexChanged(self.ShuRuFangShi.currentIndex())
-
-    def indexChanged(self, index):  # 切换输入方式
-        # indexChanged函数用于切换输入方式。它首先阻止dt对象发出任何信号，然后停止并等待当前的检测线程。
-        # 然后，根据下拉列表的当前索引来设置输入源。输入源可以是摄像头、文件、全屏。最后，它允许dt对象再次发出信号。
-        self.dt.blockSignals(True)
-        self.dt.stopThread()
-        self.dt.wait()
-        if index == 0:  # webcam 0
-            self.setSource('0')
-        elif index == 1 and os.path.exists(self.WenJian.text()):  # file
-            self.setSource(self.WenJian.text())
-        elif index == 2:  # full screen 0
-            self.setSource('screen')
-        self.dt.blockSignals(False)
-
-    def setSource(self, source, **kwargs) -> bool:  # 设置输入源。
-        self.source = str(source) # 它首先将输入源转换为字符串
-        # 然后尝试创建一个新的DataLoader实例，该实例使用输入源、帧跳过数、旋转类型作为参数。
-        try:
-            self.dt.dataset = detect.DataLoader(self.source,
-                                                # frame_skip=self.ShuaXinLv.value(),
-                                                flip=self.flip_type[self.FanZhuanTuXiang.currentIndex()],
-                                                rotate=self.rotate_type[self.XuanZhuanTuXiang.currentIndex()],
-                                                **kwargs)
-        # 如果在创建DataLoader实例时发生异常，它会在标签上显示错误信息，并在日志中以红色显示错误信息，然后返回False。
-        except Exception as e:
-            self.TuXiangShuChu.setText(str(e))
-            self.displayLog(str(e), color='red')
-            return False
-        # 否则，它会停止任何正在进行的录制，阻止下拉列表发出信号，然后根据输入源的类型设置下拉列表的当前索引。
-        # 最后，它允许下拉列表再次发出信号，如果数据集是摄像头或屏幕，它会启动检测线程。
-        self.stopRecord()
-        self.ShuRuFangShi.blockSignals(True)
-        index = (self.source == '0',
-                 self.dt.dataset.is_image or self.dt.dataset.is_video,
-                 # self.dt.dataset.is_url,
-                 self.source.lower() == 'screen',
-                 True).index(True)
-        self.ShuRuFangShi.setCurrentIndex(index)
-        self.ShuRuFangShi.blockSignals(False)
-        # 如果数据集是图像或视频，它会设置文本输入框的文本为输入源，然后从输入源读取一帧图像，可能会翻转和旋转图像，然后显示图像。
-        if self.dt.dataset.is_wabcam or self.dt.dataset.is_screen:
-            self.dt.startThread()
-        elif self.dt.dataset.is_image or self.dt.dataset.is_video:
-            self.WenJian.setText(self.source)
-            vc = cv2.VideoCapture(self.source)
-            img = vc.read()[1]
-            if self.FanZhuanTuXiang.currentIndex() != 0:
-                img = cv2.flip(img, self.flip_type[self.FanZhuanTuXiang.currentIndex()])
-            if self.XuanZhuanTuXiang.currentIndex() != 0:
-                img = cv2.rotate(img, self.rotate_type[self.XuanZhuanTuXiang.currentIndex()])
-            self.displayImg(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-            vc.release()
-        # 最后，它返回一个布尔值，表示dt对象是否有一个dataset属性。
-        return 'dataset' in self.dt.__dict__.keys()
-
-    def start(self):  # 启动检测线程
-        # 如果检测线程已经在运行，它会打印一条消息并返回。如果模型文件或视频文件不存在，它会在日志中显示一条错误消息并返回。
-        if self.dt.is_detecting:
-            print('already running')
-            return
-        if not os.path.exists(self.QuanZhong.text()):
-            self.displayLog(f'"{self.QuanZhong.text()}" 模型文件不存在', color='red')
-            return
-        if self.ShuRuFangShi.currentIndex() == 1 and not os.path.exists(self.WenJian.text()):  # 视频
-            self.displayLog(f'"{self.WenJian.text()}" not exist', color='red')
-            return
-        if 'dataset' not in self.dt.__dict__.keys() and not self.setSource(self.source):
-            return
-        # 然后，它会初始化一个YOLOv5模型，并设置模型的配置，包括输入宽度、输入高度、置信度阈值、IOU阈值、是否绘制框、线宽、
-        # 类名、框颜色、文本颜色和是否返回位置等。然后，它会初始化模型，并开始检测。最后，它会在状态栏上显示一条消息。
-        self.dt.model = detect.YOLOv5()
-        self.dt.model.initConfig(input_width=640,
-                                 input_height=640,
-                                 conf_thres=self.ZhiXinDu.value(),
-                                 iou_thres=self.IOU.value(),
-                                 draw_box=self.MaoKuang.isChecked(),
-                                 thickness=2,
-                                 class_names=self.LeiBie.text().split(','),
-                                 box_color=self.box_color,
-                                 txt_color=tuple(255 - x for x in self.box_color),
-                                 with_pos=self.DaYinZuoBiao.isChecked(),
-                                 )
-
-        self.dt.model.initModel(self.QuanZhong.text(), t='onnxruntime')  # cv2.dnn or onnxruntime
-
-        self.dt.startDetect()
-        self.saveToFile(self.LuZhiShiPin)
-        print('start detect')
-        #self.statusBar().showMessage('start detect...', 5000)
-
-    # todo
-    # def pause(self):  # 暂停
-    #     pass
-
-    def stop(self):  # 停止检测
-        # 它首先停止任何正在进行的录制。
-        self.stopRecord()
-        # 如果检测线程正在运行，它会停止检测，并在状态栏上显示一条消息。
-        if self.dt.is_detecting:
-            self.dt.stopDetect()
-            #self.statusBar().showMessage('stop detect', 5000)
-            print('stop detect')
-            return
-        # 如果检测线程正在运行但没有进行检测，它会停止线程并等待线程结束。
-        if self.dt.is_running:
-            self.dt.stopThread()
-            self.dt.wait()
-
-    def changeModelFile(self, path=None):  # 选择权重文件
-        # 如果没有提供路径，它会打开一个文件对话框让用户选择模型文件。
-        if path is None:
-            path, _ = QFileDialog.getOpenFileName(self, "选择模型",
-                                                  os.path.abspath(self.QuanZhong.text()),
-                                                  '*.onnx')
-        # 然后，它会设置文本输入框的文本为模型文件的路径。
-        if path:
-            self.QuanZhong.setText(path)
-        # 最后，它会查找与模型文件同名的类别文件，如果存在，它会调用changeClassFile函数更改类别文件。
-        class_txt_path = os.path.join(os.path.dirname(os.path.dirname(path)),
-                                      ''.join(os.path.basename(path).split('.')[:-1]) + '.txt')
-        if os.path.exists(class_txt_path):
-            self.changeClassFile(path=class_txt_path)
-
-    def changeClassFile(self, path=None):  # 选择类别文件
-        # 如果没有提供路径，它会打开一个文件对话框让用户选择类别文件。然后，它会设置文本编辑器的文本为类别文件的内容。
-        if path is None:
-            path, _ = QFileDialog.getOpenFileName(self, "选择文件",
-                                                  os.path.abspath(self.class_file),
-                                                  '*.txt')
-        if path:
-            self.class_file = path
-            with open(self.class_file, 'r') as f:
-                self.LeiBie.setText(f.read().replace('，', ',').replace('|', ',').replace('\n', ','))
-
-    def changeMediaFile(self, path=None):  # 选择媒体文件
-        # 如果没有提供路径，它会打开一个文件对话框让用户选择媒体文件。然后，它会设置输入源为媒体文件的路径。
-        if path is None:
-            path, _ = QFileDialog.getOpenFileName(self, "选择文件",
-                                                  os.path.abspath(self.WenJian.text()),
-                                                  '*.asf *.avi *.gif *.m4v *.mkv *.mov *.mp4 *.mpeg *.mpg *.ts *.wmv '
-                                                  '*.bmp *.dng *.jpeg *.jpg *.mpo *.png *.tif *.tiff *.webp *.pfm')
-        if path:
-            self.setSource(path)
-
-    def changeOutputPath(self):  # 选择保存位置
-        # 它会打开一个目录对话框让用户选择保存位置。然后，它会设置文本输入框的文本为保存位置的路径。
-        file_path = QFileDialog.getExistingDirectory(self, "选择保存位置", self.BaoCun.text())
-        if file_path:
-            self.BaoCun.setText(file_path)
-
-    def displayClassNum(self):  # 显示类别数量
-        # 它首先从文本编辑器中获取类别列表，然后创建一个集合以去除重复的类别，并且去除空字符串。最后，它将类别数量显示在标签上。
-        #class_set = set(self.LeiBie.toPlainText().split(","))
-        class_set = set(self.LeiBie.text().split(","))
-        class_set.discard('')
-        self.label_32.setText(f'类别({len(class_set)}):')
-
-    def displayFps(self):  # 显示FPS。将检测对象的display_fps属性设置为复选框的选中状态。
-        self.dt.display_fps = self.XianShiZhenShu.isChecked()
-
-    def displayImg(self, img: numpy.ndarray):  # 显示图片到标签上。
-        # 如果正在保存视频，它会将图像写入视频写入器。然后，它将图像数据设置为脚本API的图像数据。
-        # 然后，它创建一个QImage对象，将图像的宽度和高度缩放到标签的宽度和高度之间的较小值，然后将缩放后的图像设置为标签的像素图。
-        if self.save_video:
-            self.video_writer.write(cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-        # self.script_api.img_data = img
-        img = QtGui.QImage(img.data, img.shape[1], img.shape[0], img.shape[1] * 3, QtGui.QImage.Format_RGB888)
-        p = min(self.TuXiangShuChu.width() / img.width(), self.TuXiangShuChu.height() / img.height())
-        pix = QtGui.QPixmap(img).scaled(int(img.width() * p), int(img.height() * p))
-        self.TuXiangShuChu.setPixmap(pix)
-
-    def displayLog(self, text: str, color='black', plain_text=False):  # 输出控制台信息到LiuCheng
-        # 首先创建一个带有当前时间的头部字符串。
-        head_ = f"{datetime.now().strftime('%H:%M:%S.%f')} >> "
-        # 然后，根据文本是否以’<'开始或是否为纯文本，它以不同的方式添加文本到文本浏览器。
-        if text.startswith(('<',)) or plain_text:
-            self.LiuCheng.setTextColor(QtGui.QColor('black'))
-            self.LiuCheng.append(head_)
-            self.LiuCheng.setTextColor(QtGui.QColor(color))
-            self.LiuCheng.insertPlainText(text)
-        else:
-            text = f"{head_}<font color='{color}'>{text}"
-            self.LiuCheng.append(text)
-        # 自动切换锁定状态，根据滚动条的值是否大于或等于其最大值来设置复选按钮的选中状态，并根据复选按钮的选中状态来设置滚动条的值。
-        scrollbar = self.LiuCheng.verticalScrollBar()
-        self.SuoDing.setChecked(scrollbar.value() >= scrollbar.maximum())
-        if self.SuoDing.isChecked():
-            scrollbar.setValue(scrollbar.maximum())
-
-    def lockBottom(self):  # 锁定底部切换
-        # 它将滚动条的值设置为最大值（如果按钮被按下）或最大值减一（如果按钮没有被按下）。
-        scrollbar = self.LiuCheng.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum() if self.SuoDing.isChecked() else scrollbar.maximum() - 1)
-
+# ==================== Qt事件 ====================
     def eventFilter(self, objwatched, event):  # 重写事件过滤
         # 它首先检查观察对象和事件类型。
         eventType = event.type()
@@ -570,4 +594,3 @@ class MainWindow(QtWidgets.QMainWindow, FireSmokeDetection.Ui_MainWindow):
             sys.stderr = sys.__stderr__
         return super().eventFilter(objwatched, event)
         # 最后，这个函数会调用父类的eventFilter方法处理其他类型的事件。
-
