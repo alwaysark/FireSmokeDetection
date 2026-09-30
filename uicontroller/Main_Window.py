@@ -35,6 +35,7 @@ class DetectThread(QtCore.QThread):
     img_sig = QtCore.pyqtSignal(numpy.ndarray)  # 定义一个信号，用于发送图像
     res_sig = QtCore.pyqtSignal(dict)  # 定义一个信号，用于发送结果
 
+    #初始化时模型和数据集都是None，然后运行的时候靠依赖注入
     def __init__(self, model: detect.YOLOv5 = None, dataset: detect.DataLoader = None):
         super(DetectThread, self).__init__()  # 调用父类构造函数
         #self.is_pause = False  # 初始化暂停标志为False
@@ -71,9 +72,6 @@ class DetectThread(QtCore.QThread):
         self.is_running = True  # 设置运行标志为True
         if not self.isRunning():  # 如果线程没有运行
             self.start()  # 启动线程
-
-    # def pauseDetect(self):
-    #     self.is_pause = True  # 设置暂停标志为True
 
     def main(self):  # 主函数
         i = 0
@@ -169,7 +167,6 @@ class MainWindow(QtWidgets.QMainWindow, FireSmokeDetection.Ui_MainWindow):
 
         self.loadConfig()
 
-
 # ==================== 绑定信号和槽（全部 connect 都在这里） ====================
     def UI(self):
         # 选择媒体文件，开始和停止检测，保存日志，保存截图，保存视频，更改类别，显示类别个数，打开保存目录，导入自定义脚本，更改输入配置，
@@ -193,7 +190,6 @@ class MainWindow(QtWidgets.QMainWindow, FireSmokeDetection.Ui_MainWindow):
         self.MaoKuang.clicked.connect(self.changeInputConfig)  # 是否画锚框
         self.ZhiXinDu.valueChanged.connect(self.changeInputConfig)  # 更改置信度
         self.IOU.valueChanged.connect(self.changeInputConfig)  # 更改IOU
-        #self.ShuaXinLv.valueChanged.connect(self.changeInputConfig)  # 跳帧
         self.XuanZhuanTuXiang.currentIndexChanged.connect(self.changeInputConfig)  # 旋转
         self.FanZhuanTuXiang.currentIndexChanged.connect(self.changeInputConfig)  # 翻转
         self.MaoKuangYanSe.clicked.connect(self.changeBoxColor)  # 更改锚框颜色
@@ -298,11 +294,11 @@ class MainWindow(QtWidgets.QMainWindow, FireSmokeDetection.Ui_MainWindow):
         self.dt.blockSignals(True)
         self.dt.stopThread()
         self.dt.wait()
-        if index == 0:  # webcam 0
+        if index == 0:  # 摄像头
             self.setSource('0')
-        elif index == 1 and os.path.exists(self.WenJian.text()):  # file
+        elif index == 1 and os.path.exists(self.WenJian.text()):  # 选择图片或者视频
             self.setSource(self.WenJian.text())
-        elif index == 2:  # full screen 0
+        elif index == 2:  # 获取屏幕
             self.setSource('screen')
         self.dt.blockSignals(False)
 
@@ -461,15 +457,14 @@ class MainWindow(QtWidgets.QMainWindow, FireSmokeDetection.Ui_MainWindow):
 
 
 # ==================== 内部辅助（不连任何信号） ====================
-    def setSource(self, source, **kwargs) -> bool:  # 设置输入源。
+    # 设置输入源
+    def setSource(self, source) -> bool:
         self.source = str(source) # 它首先将输入源转换为字符串
-        # 然后尝试创建一个新的DataLoader实例，该实例使用输入源、帧跳过数、旋转类型作为参数。
+        # 然后尝试创建一个新的DataLoader实例，该实例使用输入源、翻转、旋转类型作为参数。
         try:
             self.dt.dataset = detect.DataLoader(self.source,
-                                                # frame_skip=self.ShuaXinLv.value(),
                                                 flip=self.flip_type[self.FanZhuanTuXiang.currentIndex()],
-                                                rotate=self.rotate_type[self.XuanZhuanTuXiang.currentIndex()],
-                                                **kwargs)
+                                                rotate=self.rotate_type[self.XuanZhuanTuXiang.currentIndex()])
         # 如果在创建DataLoader实例时发生异常，它会在标签上显示错误信息，并在日志中以红色显示错误信息，然后返回False。
         except Exception as e:
             self.TuXiangShuChu.setText(str(e))
@@ -481,13 +476,12 @@ class MainWindow(QtWidgets.QMainWindow, FireSmokeDetection.Ui_MainWindow):
         self.ShuRuFangShi.blockSignals(True)
         index = (self.source == '0',
                  self.dt.dataset.is_image or self.dt.dataset.is_video,
-                 # self.dt.dataset.is_url,
                  self.source.lower() == 'screen',
                  True).index(True)
         self.ShuRuFangShi.setCurrentIndex(index)
         self.ShuRuFangShi.blockSignals(False)
         # 如果数据集是图像或视频，它会设置文本输入框的文本为输入源，然后从输入源读取一帧图像，可能会翻转和旋转图像，然后显示图像。
-        if self.dt.dataset.is_wabcam or self.dt.dataset.is_screen:
+        if self.dt.dataset.is_webcam or self.dt.dataset.is_screen:
             self.dt.startThread()
         elif self.dt.dataset.is_image or self.dt.dataset.is_video:
             self.WenJian.setText(self.source)
@@ -514,7 +508,6 @@ class MainWindow(QtWidgets.QMainWindow, FireSmokeDetection.Ui_MainWindow):
         # IOU阈值、是否显示框、框颜色、是否打印结果、是否返回位置、是否记录视频、记录帧数、输出路径、脚本路径、脚本状态和检测状态等。
         # 这些配置被用来初始化各种参数和设置。
         cfg = general.cfg('config.cfg')
-        #self.ShuaXinLv.setValue(cfg.search('root', 'frame_skip', default_value=-1, return_type=int))
         self.FanZhuanTuXiang.setCurrentIndex(cfg.search('root', 'flip', default_value=0, return_type=int))
         self.XuanZhuanTuXiang.setCurrentIndex(cfg.search('root', 'rotate', default_value=0, return_type=int))
         self.setSource(cfg.search('root', 'input_source', default_value=0))
@@ -548,7 +541,6 @@ class MainWindow(QtWidgets.QMainWindow, FireSmokeDetection.Ui_MainWindow):
         with general.cfg('config.cfg') as cfg:
             cfg.set('root', 'detect_status', self.dt.is_detecting)
             cfg.set('root', 'input_source', self.source)
-            #cfg.set('root', 'frame_skip', self.ShuaXinLv.value())
             cfg.set('root', 'flip', self.FanZhuanTuXiang.currentIndex())
             cfg.set('root', 'rotate', self.XuanZhuanTuXiang.currentIndex())
             cfg.set('root', 'model_path', self.QuanZhong.text())

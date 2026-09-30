@@ -251,35 +251,30 @@ class DataLoader(object):
     """逐帧加载图像，返回RGB格式"""
     VIDEO_TYPE = ('asf', 'avi', 'gif', 'm4v', 'mkv', 'mov', 'mp4', 'mpeg', 'mpg', 'ts', 'wmv') # 定义支持的视频文件类型
     IMAGE_TYPE = ('bmp', 'dng', 'jpeg', 'jpg', 'mpo', 'png', 'tif', 'tiff', 'webp', 'pfm')  # 定义支持的图像文件类型
-    URL_TYPE = ('rtsp://', 'rtmp://', 'http://', 'https://')  # 定义支持的URL类型
 
-    def __init__(self, source: Union[int, str], frame_skip=-1, flip=None, rotate=None, **kwargs):
+    def __init__(self, source: Union[int, str], flip=None, rotate=None):
         """
         :param source: 输入源
-        :param frame_skip: 是否跳帧，<0: 自动; =0: 不跳帧; >0: 跳帧  # 仅视频
         :param flip: 翻转参数
         :param rotate: 旋转参数
         """
         self.source, *self.params = str(source).split()  # 解析输入源和参数
         self.flip = flip  # 设置翻转参数
         self.rotate = rotate  # 设置旋转参数
-        self.is_wabcam = self.source.isnumeric()  # 判断是否为摄像头
+        self.is_webcam = self.source.isnumeric()  # 判断是否为摄像头
         self.is_video = self.source.lower().endswith(DataLoader.VIDEO_TYPE)  # 判断是否为视频文件
         self.is_image = self.source.lower().endswith(DataLoader.IMAGE_TYPE)  # 判断是否为图像文件
         self.is_screen = self.source.startswith('screen')  # 判断是否为屏幕捕捉
-        self.is_url = self.source.lower().startswith(DataLoader.URL_TYPE)  # 判断是否为URL
-        assert self.is_wabcam or self.is_video or self.is_image or self.is_screen or self.is_url, \
+        assert self.is_webcam or self.is_video or self.is_image or self.is_screen, \
             f'Invalid or unsupported file format: {self.source}'  # 断言输入源有效性
 
-        if self.is_wabcam:
+        if self.is_webcam:
             self.cap = cv2.VideoCapture(int(self.source), cv2.CAP_DSHOW)  # 如果是摄像头，初始化摄像头捕获
             self.w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))  # 获取帧宽度
             self.h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))  # 获取帧高度
             assert self.cap.isOpened(), f'Failed to load: {self.source}'  # 确保摄像头已正确打开
-        elif self.is_video or self.is_image or self.is_url:
-            self.frame_skip = frame_skip if not self.is_image else 0 # 设置跳帧参数，图像时不跳帧
-            self.idx = 0 # 初始化帧索引
-            if self.frame_skip < 0:
+        elif self.is_video or self.is_image:
+            if self.is_video:
                 class VideoFrameDraw(threading.Thread):
                     def __init__(self):
                         super(VideoFrameDraw, self).__init__(daemon=True)  # 创建一个守护线程
@@ -289,8 +284,7 @@ class DataLoader(object):
                         self.release = self.cap.release  # 释放视频资源
                         assert self.cap.isOpened(), f'Failed to load {source}'  # 确保视频已正确打开
 
-                        self.fps = self.cap.get(cv2.CAP_PROP_FPS)  # 获取视频的FPS
-                        self.frame_count = self.cap.get(cv2.CAP_PROP_FRAME_COUNT)  # 获取视频的帧数
+                        self.fps = self.cap.get(cv2.CAP_PROP_FPS)  # 获取视频的FPS（解码线程按此节奏推进）
                         self.w, self.h = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH), self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT) # 获取视频的宽度和高度
                         self.ret = self.cap.grab()  # 尝试抓取第一帧
                         if not self.ret:
@@ -329,12 +323,10 @@ class DataLoader(object):
 
                 self.cap = VideoFrameDraw()  # 创建 VideoFrameDraw 实例
                 self.w, self.h = int(self.cap.w), int(self.cap.h)  # 获取视频的宽度和高度
-                self.fps = self.cap.fps  # 获取视频的帧率
-            else:  # frame_skip >= 0
+            else:  # 图片
                 self.cap = cv2.VideoCapture(self.source)  # 创建视频捕获实例
                 self.w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))  # 获取视频的宽度
                 self.h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))  # 获取视频的高度
-                self.fps = self.cap.get(cv2.CAP_PROP_FPS)  # 获取视频的帧率
             assert self.cap.isOpened(), f'Failed to load: {self.source}'  # 确保视频已正确打开
         elif self.is_screen:
             import mss  # 导入 mss 模块
@@ -356,17 +348,17 @@ class DataLoader(object):
             self.monitor = {"left": left, "top": top, "width": width, "height": height}  # 创建捕捉区域的字典
 
     def __next__(self) -> tuple[numpy.ndarray, str]:
-        if self.is_wabcam:
+        if self.is_webcam:
             ret, img = self.cap.read()  # 如果是网络摄像头，读取帧
             path = ''  # 设置路径为空字符串
-        elif self.is_video or self.is_image or self.is_url:
-            while self.idx <= self.frame_skip:
-                ret = self.cap.grab()  # 如果是视频、图像或URL，跳过指定数量的帧
-                self.idx += 1  # 增加帧索引
-                if not ret:
-                    raise StopIteration  # 如果抓取失败，抛出停止迭代异常
-            ret, img = self.cap.retrieve()  # 检索当前帧
-            self.idx = 0  # 重置帧索引
+        elif self.is_video or self.is_image:
+            if self.is_video:
+                # 视频的解码由 VideoFrameDraw 后台线程按视频帧率推进，这里只取最新一帧
+                ret, img = self.cap.retrieve()
+            else:
+                # 图片用裸 VideoCapture：grab 推进一帧，retrieve 取出
+                self.cap.grab()
+                ret, img = self.cap.retrieve()
             path = self.source  # 设置路径为输入源
         elif self.is_screen:
             ret = True  # 如果是屏幕捕捉，设置返回值为True
