@@ -115,7 +115,8 @@ class YOLOv5(object):
         if boxes is None:
             return detection
         for box, score, class_id in zip(boxes, scores, class_ids):
-            x1, y1, x2, y2 = box.astype(int)
+            x1, y1, w, h = box.astype(int)   # 框为 xywh（NMS 输出格式）
+            x2, y2 = x1 + w, y1 + h
             label = self.class_names[class_id]
             if label == '_':
                 continue
@@ -221,17 +222,19 @@ class YOLOv5(object):
         # 将边界框缩放到原始图像尺寸
         boxes = self.__rescaleBoxes(boxes)
 
+        # xyxy → xywh，与 __extractBoxes 的输出格式保持一致
+        boxes = numpy.stack([boxes[:, 0], boxes[:, 1],
+                             boxes[:, 2] - boxes[:, 0], boxes[:, 3] - boxes[:, 1]], axis=1)
+
         return boxes, scores, class_ids
 
     def __extractBoxes(self, predictions):
-        boxes = predictions[:, :4]   # 从预测中提取框
+        boxes = predictions[:, :4]   # 从预测中提取框（中心点格式 cx,cy,w,h）
         boxes = self.__rescaleBoxes(boxes)  # 将框缩放到原始图像尺寸
-        # 将框转换为xyxy格式
+        # 中心格式 → xywh（左上角 + 宽高），NMSBoxes 要求此格式
         boxes_ = numpy.copy(boxes)
         boxes_[..., 0] = boxes[..., 0] - boxes[..., 2] * 0.5
         boxes_[..., 1] = boxes[..., 1] - boxes[..., 3] * 0.5
-        boxes_[..., 2] = boxes[..., 0] + boxes[..., 2] * 0.5
-        boxes_[..., 3] = boxes[..., 1] + boxes[..., 3] * 0.5
         return boxes_
 
     def __rescaleBoxes(self, boxes):

@@ -223,8 +223,9 @@ class MainWindow(QtWidgets.QMainWindow, FireSmokeDetection.Ui_MainWindow):
             self.setSource(path)
 
     # ↑ UI(): self.QuanZhongLuJing.clicked —— 选择模型
-    def changeModelFile(self, path=None):  # 选择权重文件
-        # 如果没有提供路径，它会打开一个文件对话框让用户选择模型文件。
+    def changeModelFile(self, path=None):
+        # 这个函数只是改变QuanZhong文本框的文本，当重新启动检测时才从这个文本框拿到模型名字去换模型
+        # 如果没有提供路径，就打开一个文件对话框让用户选择模型文件。
         if path is None:
             path, _ = QFileDialog.getOpenFileName(self, "选择模型",
                                                   os.path.abspath(self.QuanZhong.text()),
@@ -233,8 +234,9 @@ class MainWindow(QtWidgets.QMainWindow, FireSmokeDetection.Ui_MainWindow):
         if path:
             self.QuanZhong.setText(path)
         # 最后，它会查找与模型文件同名的类别文件，如果存在，它会调用changeClassFile函数更改类别文件。
+        # 注意用 splitext 取主干，保留点号（m0.9.onnx → m0.9.txt）；split+join 会丢点变成 m09.txt
         class_txt_path = os.path.join(os.path.dirname(os.path.dirname(path)),
-                                      ''.join(os.path.basename(path).split('.')[:-1]) + '.txt')
+                                      os.path.splitext(os.path.basename(path))[0] + '.txt')
         if os.path.exists(class_txt_path):
             self.changeClassFile(path=class_txt_path)
 
