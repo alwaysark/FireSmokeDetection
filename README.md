@@ -51,20 +51,6 @@ utils/utils.py                警报音播放
 need/                         模型、类别、测试视频、警报音
 ```
 
-## 相对原版的修复与变更
-
-本项目基于 [xun-xh/yolov5-onnx-pyqt-exe](https://github.com/xun-xh/yolov5-onnx-pyqt-exe) 重构。本分支相对原版：
-
-**移除**：登录注册系统、脚本编辑器、107 个依赖中的 101 个
-
-**修复**：
-- 主窗口依赖垃圾回收时机存活的隐患（入口重构，窗口与事件循环同作用域）
-- NMS 输入框格式错误（xyxy → NMS 要求的 xywh）
-- 模型-类别文件自动配对丢失点号的问题（splitext）
-- saveConfig 悬空引用、参数热更新等若干缺陷
-
-**重组**：函数按界面绑定顺序排列并标注触发来源；requirements 精简至运行必需
-
 ## 已知限制
 
 - CPU 推理速度有限（数 FPS 到十几 FPS，视机型），可换 GPU 版 onnxruntime 提速
