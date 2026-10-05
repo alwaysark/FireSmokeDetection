@@ -6,6 +6,7 @@ import time
 from typing import Union
 
 import cv2
+import mss
 import numpy
 
 
@@ -329,7 +330,6 @@ class DataLoader(object):
                 self.h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))  # 获取视频的高度
             assert self.cap.isOpened(), f'Failed to load: {self.source}'  # 确保视频已正确打开
         elif self.is_screen:
-            import mss  # 导入 mss 模块
             screen, left, top, width, height = 0, None, None, None, None  # 默认设置为全屏捕捉 0
             if len(self.params) == 1:
                 screen = int(self.params[0])  # 如果参数长度为1，设置屏幕编号
@@ -338,8 +338,7 @@ class DataLoader(object):
             elif len(self.params) == 5:
                 screen, left, top, width, height = (int(x) for x in self.params)  # 如果参数长度为5，设置屏幕编号和捕捉区域的左上角坐标和宽高
             self.sct = mss.mss()  # 创建 mss 实例
-
-            # Parse monitor shape
+            # 解析显示器形状
             monitor = self.sct.monitors[screen]  # 获取指定屏幕的监视器信息
             top = monitor["top"] if top is None else (monitor["top"] + top)  # 计算捕捉区域的顶部位置
             left = monitor["left"] if left is None else (monitor["left"] + left)  # 计算捕捉区域的左侧位置
@@ -349,7 +348,7 @@ class DataLoader(object):
 
     def __next__(self) -> tuple[numpy.ndarray, str]:
         if self.is_webcam:
-            ret, img = self.cap.read()  # 如果是网络摄像头，读取帧
+            ret, img = self.cap.read()  # 读取帧
             path = ''  # 设置路径为空字符串
         elif self.is_video or self.is_image:
             if self.is_video:

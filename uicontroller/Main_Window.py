@@ -71,7 +71,7 @@ class DetectThread(QtCore.QThread):
         self.is_detecting = True  # 设置检测标志为True
         self.is_running = True  # 设置运行标志为True
         if not self.isRunning():  # 如果线程没有运行
-            self.start()  # 启动线程
+            self.start()  # 启动线程，内部调用run函数
 
     def main(self):  # 主函数
         i = 0
@@ -246,7 +246,7 @@ class MainWindow(QtWidgets.QMainWindow, FireSmokeDetection.Ui_MainWindow):
             self.displayLog(f'"{self.QuanZhong.text()}" 模型文件不存在', color='red')
             return
         if self.ShuRuFangShi.currentIndex() == 1 and not os.path.exists(self.WenJian.text()):  # 视频
-            self.displayLog(f'"{self.WenJian.text()}" not exist', color='red')
+            self.displayLog(f'"{self.WenJian.text()}" 文件不存在', color='red')
             return
         if 'dataset' not in self.dt.__dict__.keys() and not self.setSource(self.source):
             return
