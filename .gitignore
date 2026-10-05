@@ -13,3 +13,4 @@ out/
 
 # 工具本地文件
 .zcodeignore
+.idea/
